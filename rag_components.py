@@ -2,12 +2,12 @@
 
 import os 
 import pandas as pd
+from streamlit import cache_data, cache_resource
 from langchain.docstore.document import Document
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import Chroma
 from langchain.prompts import PromptTemplate
-from langchain.chains import ConversationalRetrievalChain # <- MUDANÇA IMPORTANTE
-from langchain.memory import ConversationBufferMemory # <- MUDANÇA IMPORTANTE
+from langchain.chains import ConversationalRetrievalChain
 
 # FIX for ChromaDB/SQLite on Streamlit Cloud
 __import__('pysqlite3')
@@ -15,8 +15,13 @@ import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
 
+@cache_data 
 def load_and_preprocess_data(folder_path):
+    """
+    Carrega TODOS os arquivos .csv de uma pasta, os combina e retorna um DataFrame.
+    """
     all_dataframes = []
+    print(f"Lendo arquivos da pasta: {folder_path}")
     try:
         filenames = os.listdir(folder_path)
     except FileNotFoundError:
@@ -25,11 +30,12 @@ def load_and_preprocess_data(folder_path):
         if filename.endswith('.csv'):
             file_path = os.path.join(folder_path, filename)
             try:
+                print(f"  -> Lendo arquivo: {filename}")
                 df = pd.read_csv(file_path)
                 if "text" in df.columns and "product" in df.columns:
                     all_dataframes.append(df)
             except Exception as e:
-                print(f"Erro ao ler o arquivo '{filename}': {e}")
+                print(f"  -> Erro ao ler o arquivo '{filename}': {e}")
     if all_dataframes:
         return pd.concat(all_dataframes, ignore_index=True)
     else:
@@ -37,66 +43,71 @@ def load_and_preprocess_data(folder_path):
 
 
 # =============================================================================
-# FUNÇÃO ATUALIZADA PARA USAR A CADEIA CONVERSACIONAL COM MEMÓRIA
+# NOVA ESTRUTURA OTIMIZADA COM CACHE
 # =============================================================================
-def create_rag_chain(dataframe, product_name, persona_name, api_key):
-    if dataframe.empty:
-        return None
 
-    product_df = dataframe[dataframe['product'].str.lower() == product_name.lower()].copy()
+@cache_resource(show_spinner=False)
+def get_retriever(_dataframe, product_name, api_key):
+    """
+    Função dedicada e otimizada para criar e cachear apenas o retriever, 
+    que é a parte mais pesada e que consome mais memória.
+    """
+    print(f"Criando ou carregando retriever do cache para o produto: {product_name}")
+    
+    product_df = _dataframe[_dataframe['product'].str.lower() == product_name.lower()].copy()
     if product_df.empty:
         return None
 
     documents = [Document(page_content=row['text']) for index, row in product_df.iterrows()]
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
     vector_store = Chroma.from_documents(documents, embeddings)
+    
+    return vector_store.as_retriever()
+
+
+def create_rag_chain(retriever, product_name, persona_name, api_key):
+    """
+    Cria a cadeia conversacional de forma leve, usando um retriever já em cache.
+    """
+    if retriever is None:
+        return None
+
     llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=api_key, temperature=0.3)
 
-    # A memória guarda o histórico da conversa
-    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-
-    # O prompt agora tem uma estrutura ligeiramente diferente para lidar com o histórico
     prompt_template = f"""
     Sua missão é atuar como {persona_name}, uma persona sintética que representa um cliente da Nomad que usa o produto '{product_name}'.
-    Você NÃO é uma IA, um especialista ou um porta-voz. Você é um cliente comum.
-
-    Use as seguintes peças de contexto e o histórico do chat para responder à pergunta no final.
-    Sua resposta deve ser uma síntese coesa e natural das informações, como se você fosse uma única pessoa.
-    
+    Você NÃO é uma IA. Você é um cliente comum.
+    Use o contexto e o histórico do chat para responder à pergunta. Sua resposta deve ser uma síntese coesa e natural das informações.
     REGRAS DE ATUAÇÃO:
-    1.  **CONSISTÊNCIA:** Mantenha a consistência com o que já foi dito no HISTÓRICO DO CHAT. Se uma nova informação do contexto contradiz o que você disse antes, reconheça a nuance (ex: "Pensando bem...", "Embora eu tenha dito X, também vejo que...").
-    2.  **PERSONA E TOM:** Responda em primeira pessoa ("Eu acho...", "Na minha experiência..."). Use um tom coloquial e construtivo, não excessivamente crítico.
-    3.  **SÍNTESE, NÃO LISTAGEM:** Integre as ideias do contexto e do histórico em uma única narrativa.
+    1.  **CONSISTÊNCIA:** Mantenha a consistência com o que já foi dito no HISTÓRICO DO CHAT.
+    2.  **PERSONA E TOM:** Responda em primeira pessoa ("Eu acho..."). Use um tom coloquial e construtivo.
+    3.  **SÍNTESE, NÃO LISTAGEM:** Integre as ideias em uma única narrativa.
     4.  **100% FIEL AO CONTEXTO:** Sua única fonte da verdade é o CONTEXTO e o histórico. Não invente informações.
     5.  **SEJA HONESTO SE NÃO SOUBER:** Se o contexto não tiver a resposta, diga que não sabe.
-
-    CONTEXTO:
-    {{context}}
-
-    HISTÓRICO DO CHAT:
-    {{chat_history}}
-
-    PERGUNTA:
-    {{question}}
-
+    6.  **EQUILÍBRIO E TOM AMENO:** Seu tom geral deve ser equilibrado e construtivo.
+    ---
+    CONTEXTO: {{context}}
+    HISTÓRICO DO CHAT: {{chat_history}}
+    PERGUNTA: {{question}}
     Sua Resposta (como {persona_name}):
     """
     QA_CHAIN_PROMPT = PromptTemplate.from_template(prompt_template)
 
-    # Criação da cadeia conversacional
+    # Criação da cadeia conversacional, sem gerenciar a memória aqui (corrigindo o DeprecationWarning)
     rag_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
-        retriever=vector_store.as_retriever(),
-        # memory=memory, # A memória será gerenciada pelo Streamlit agora
+        retriever=retriever,
         combine_docs_chain_kwargs={'prompt': QA_CHAIN_PROMPT},
         return_source_documents=True
     )
-    return rag_chain
+    # Retorna a cadeia e o LLM para ser usado na geração de perguntas
+    return rag_chain, llm
 
 
-def generate_suggested_questions(rag_chain, persona_name, product_name):
-    # Esta função não precisa de RAG, então podemos simplificá-la para usar o LLM diretamente
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.5) # Usando flash para ser mais rápido
+@cache_data(show_spinner=False)
+def generate_suggested_questions(_llm, persona_name, product_name):
+    """Gera 10 perguntas ricas e investigativas, específicas para o produto selecionado."""
+    
     prompt = f"""
     Atue como um Pesquisador de UX e Estrategista de Produto sênior. Sua tarefa é criar exatamente 10 perguntas abertas e investigativas para serem feitas a um cliente do produto '{product_name}' da Nomad.
     O objetivo é descobrir insights sobre perfil, necessidades, dores e motivações.
@@ -104,7 +115,7 @@ def generate_suggested_questions(rag_chain, persona_name, product_name):
     Retorne o resultado como uma lista de EXATAMENTE 10 strings em Python.
     """
     try:
-        response = llm.invoke(prompt)
+        response = _llm.invoke(prompt)
         suggested_list = eval(response.content)
         if isinstance(suggested_list, list) and len(suggested_list) > 0:
             return suggested_list
