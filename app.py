@@ -19,21 +19,39 @@ if 'screen' not in st.session_state:
     st.session_state.persona_name = ""
     st.session_state.suggested_questions = []
 
+# --- Função para o Footer ---
+def render_footer():
+    st.markdown("---")
+    st.markdown("Desenvolvido por [Pedro Costa](https://www.linkedin.com/in/pedrocsta/) | Product Marketing & Martech Specialist")
+
 # =============================================================================
 # TELA 1: HOME / SELEÇÃO
 # =============================================================================
 def render_home_screen():
-    st.title("Pesquisa / Entrevista com uma Data Persona")
-    st.markdown("""
-    Bem-vindo à ferramenta de **Data Persona Interativa**. Esta aplicação utiliza um modelo de linguagem avançado 
-    (Google Gemini) sob a arquitetura **RAG (Retrieval-Augmented Generation)**. 
+    # --- NOVO TEXTO DE APRESENTAÇÃO ---
+    st.title("Data Persona Interativa 💬")
+    st.subheader("Uma ponte de empatia entre sua marca e seus clientes")
     
-    Isso significa que a persona com quem você irá conversar não usa o conhecimento geral da internet, 
-    mas sim uma **base de dados real e exclusiva** sobre clientes da marca, garantindo insights autênticos e focados.
+    st.markdown("""
+    Esta ferramenta foi desenvolvida com uma lógica de **Marketing de Produto** para empoderar times de **Marketing, Produto e Vendas**. 
+    Converse com uma representação fiel do seu público-alvo para validar hipóteses, testar narrativas, refinar a comunicação e 
+    tomar decisões mais rápidas e seguras, sempre com base em dados reais. É um artifício *data-driven* para o seu trabalho do dia a dia.
     """)
+
+    with st.expander("⚙️ Conheça o maquinário por trás da mágica"):
+        st.markdown("""
+        A persona é alimentada exclusivamente por uma base de conhecimento real do seu cliente (social listening, pesquisas, reviews, etc.). 
+        Ela não "acha" nada, apenas reflete o que seus dados dizem. Isso é possível através de:
+        - **Modelo de Linguagem (LLM):** `Google Gemini 1.5 Pro`
+        - **Arquitetura:** `RAG (Retrieval-Augmented Generation)`
+        - **Orquestração:** `LangChain`
+        - **Interface e Aplicação:** `Python + Streamlit`
+        - **Base de Dados Vetorial:** `ChromaDB (in-memory)`
+        """)
+    
     st.divider()
 
-    # Bloco corrigido para seleção da marca
+    # --- Lógica de Seleção ---
     st.selectbox(
         'Selecione a Marca:',
         ('Nomad',), # Apenas a opção 'Nomad' é selecionável
@@ -41,7 +59,6 @@ def render_home_screen():
     )
     st.caption("Em breve: Integração com Wise e Avenue.") # Informa sobre o futuro
     
-    # Como só temos Nomad, definimos a variável manualmente para o resto do código
     selected_brand = "Nomad" 
     
     selected_product = st.selectbox(
@@ -50,7 +67,6 @@ def render_home_screen():
     )
 
     if st.button("Iniciar Entrevista", type="primary"):
-        # Busca a chave da API dos segredos do Streamlit
         if "GEMINI_API_KEY" not in st.secrets:
             st.error("Chave da API não configurada. O admin do app precisa adicioná-la nos segredos do Streamlit Cloud.")
             st.stop()
@@ -72,6 +88,8 @@ def render_home_screen():
                 st.session_state.question_count = 0
                 st.rerun()
 
+    render_footer()
+
 # =============================================================================
 # TELA 2 e 3: CHAT
 # =============================================================================
@@ -83,13 +101,11 @@ def render_chat_screen():
     col1, col2 = st.columns([3, 1])
 
     with col1:
-        # Exibir histórico de mensagens
         if 'messages' in st.session_state:
             for message in st.session_state.messages:
                 with st.chat_message(message["role"]):
                     st.markdown(message["content"])
 
-        # Input do usuário
         if st.session_state.question_count < 5:
             if prompt := st.chat_input("Digite para conversar!"):
                 st.session_state.messages.append({"role": "user", "content": prompt})
@@ -113,7 +129,6 @@ def render_chat_screen():
             if 'suggested_questions' in st.session_state and st.session_state.suggested_questions:
                 for i, question in enumerate(st.session_state.suggested_questions):
                     if st.button(question, use_container_width=True, key=f"suggestion_{i}"):
-                        # Lógica para lidar com o clique do botão de sugestão
                         st.session_state.messages.append({"role": "user", "content": question})
                         with st.chat_message("user"):
                             st.markdown(question)
@@ -129,11 +144,12 @@ def render_chat_screen():
 
     if st.button("⬅️ Iniciar Nova Entrevista"):
         st.session_state.screen = 'home'
-        # Limpar estado da sessão anterior para uma nova entrevista limpa
         for key in list(st.session_state.keys()):
             if key != 'screen':
                 del st.session_state[key]
         st.rerun()
+
+    render_footer()
 
 # --- Lógica Principal para Alternar Telas ---
 if 'screen' not in st.session_state:
