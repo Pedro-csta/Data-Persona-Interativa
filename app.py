@@ -1,7 +1,6 @@
 # app.py
 import streamlit as st
 from utils import PERSONA_NAMES
-# A importação agora inclui a nova função get_retriever
 from rag_components import load_and_preprocess_data, get_retriever, create_rag_chain, generate_suggested_questions
 
 st.set_page_config(
@@ -23,7 +22,7 @@ def render_footer():
     st.markdown("Desenvolvido por [Pedro Costa](https://www.linkedin.com/in/pedrocsta/) | Product Marketing & Martech Specialist")
 
 def render_home_screen():
-    st.title("Data Persona Interativa  💬")
+    st.title("Data Persona Interativa: O Diálogo Direto com Seus Dados")
     st.markdown("""
     Esta aplicação cria uma persona interativa e 100% data-driven, utilizando a arquitetura **RAG (Retrieval-Augmented Generation)** e um modelo de linguagem avançado. Diferente de um chatbot, ela responde exclusivamente com base no conhecimento que você fornece (pesquisas, social listening, reviews), garantindo insights autênticos e focados.
     Seu verdadeiro poder é a **autonomia**. Em vez de iniciar um novo ciclo de análise para cada pergunta, a ferramenta transforma seus dados estáticos em um **ativo conversacional**. Explore os resultados de suas pesquisas ou os comentários de redes sociais usando linguagem natural, a qualquer hora.
@@ -58,15 +57,12 @@ def render_home_screen():
                 st.error("Nenhum dado válido encontrado na pasta 'data'.")
                 st.stop()
 
-            # NOVO FLUXO OTIMIZADO
-            # 1. Obter o retriever (esta parte é pesada e será cacheada)
             retriever = get_retriever(full_data, selected_product, api_key)
             
             if retriever is None:
                 st.error(f"Não foram encontrados dados para o produto '{selected_product}'.")
             else:
                 st.session_state.persona_name = PERSONA_NAMES[selected_product]
-                # 2. Criar a cadeia RAG (esta parte é leve e rápida)
                 rag_chain, llm = create_rag_chain(retriever, selected_product, st.session_state.persona_name, api_key)
                 
                 st.session_state.rag_chain = rag_chain
@@ -77,6 +73,35 @@ def render_home_screen():
                 st.rerun()
     render_footer()
 
+# =============================================================================
+# NOVA FUNÇÃO CENTRALIZADA PARA PROCESSAR MENSAGENS
+# =============================================================================
+def handle_new_message(prompt):
+    """
+    Função que lida com uma nova pergunta, seja do input ou de um botão.
+    Ela chama a IA, atualiza o histórico e o contador.
+    """
+    # Adiciona a pergunta do usuário ao histórico para exibição
+    st.session_state.messages.append({"role": "user", "content": prompt})
+
+    # Prepara o histórico para a cadeia conversacional (todas as mensagens ANTES da atual)
+    chat_history = [(msg["role"], msg["content"]) for msg in st.session_state.messages[:-1]]
+    
+    # Gera e exibe a resposta da persona
+    with st.chat_message("assistant"):
+        with st.spinner("Pensando..."):
+            response = st.session_state.rag_chain.invoke({
+                "question": prompt,
+                "chat_history": chat_history
+            })
+            response_content = response['answer']
+            st.markdown(response_content)
+    
+    # Adiciona a resposta da IA ao histórico
+    st.session_state.messages.append({"role": "assistant", "content": response_content})
+    st.session_state.question_count += 1
+
+
 def render_chat_screen():
     st.title(f"Entrevistando: {st.session_state.persona_name}")
     st.markdown(f"Você pode fazer até **{5 - st.session_state.question_count}** pergunta(s).")
@@ -84,27 +109,17 @@ def render_chat_screen():
     col1, col2 = st.columns([3, 1])
 
     with col1:
+        # Exibe o histórico de mensagens completo
         if 'messages' in st.session_state:
             for message in st.session_state.messages:
                 with st.chat_message(message["role"]):
                     st.markdown(message["content"])
         
+        # A lógica de chat agora é mais simples
         if st.session_state.question_count < 5:
             if prompt := st.chat_input("Digite para conversar!"):
-                st.session_state.messages.append({"role": "user", "content": prompt})
-                with st.chat_message("user"): st.markdown(prompt)
-                with st.chat_message("assistant"):
-                    with st.spinner("Pensando..."):
-                        chat_history = [(msg["role"], msg["content"]) for msg in st.session_state.messages[:-1]]
-                        response = st.session_state.rag_chain.invoke({
-                            "question": prompt,
-                            "chat_history": chat_history
-                        })
-                        response_content = response['answer']
-                        st.markdown(response_content)
-                st.session_state.messages.append({"role": "assistant", "content": response_content})
-                st.session_state.question_count += 1
-                st.rerun()
+                handle_new_message(prompt)
+                # O rerun não é mais necessário aqui, pois o Streamlit atualiza após o input
         else:
             st.warning("Você atingiu o limite de 5 perguntas.")
             
@@ -113,16 +128,26 @@ def render_chat_screen():
             st.subheader("Tópicos sugeridos:")
             if 'suggested_questions' in st.session_state and st.session_state.suggested_questions:
                 for i, question in enumerate(st.session_state.suggested_questions):
+                    # A lógica do botão agora também usa a função central
                     if st.button(question, use_container_width=True, key=f"suggestion_{i}"):
-                        st.session_state.messages.append({"role": "user", "content": question})
-                        st.rerun()
+                        if st.session_state.question_count < 5:
+                            handle_new_message(question)
+                            st.rerun() # Rerun é necessário para botões
+                        else:
+                            st.warning("Você atingiu o limite de perguntas.")
 
     if st.button("⬅️ Iniciar Nova Entrevista"):
-        st.session_state.screen = 'home'
+        # Limpa o estado da sessão para uma nova entrevista limpa
         for key in list(st.session_state.keys()):
             if key != 'screen': del st.session_state[key]
+        st.session_state.screen = 'home'
         st.rerun()
+
     render_footer()
+
+# --- Lógica Principal para Alternar Telas ---
+if 'screen' not in st.session_state:
+    st.session_state.screen = 'home'
 
 if st.session_state.screen == 'home':
     render_home_screen()
