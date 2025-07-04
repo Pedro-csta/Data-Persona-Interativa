@@ -29,10 +29,11 @@ def render_home_screen():
     """)
     st.divider()
 
-    selected_brand = st.selectbox(
-        'Selecione a Marca:',
-        ('Nomad', 'Wise (em breve)', 'Avenue (em breve)'),
-        disabled=(False, True, True)
+    st.selectbox(
+    'Selecione a Marca:',
+    ('Nomad',) # Apenas a opção 'Nomad' é selecionável
+)
+st.caption("Em breve: Integração com Wise e Avenue.")
     )
 
     selected_product = st.selectbox(
