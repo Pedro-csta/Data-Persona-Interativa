@@ -1,7 +1,6 @@
 # rag_components.py
 
-# Adicionamos a biblioteca 'os' para interagir com o sistema de arquivos
-import os
+import os 
 import pandas as pd
 from langchain.docstore.document import Document
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
@@ -49,6 +48,9 @@ def load_and_preprocess_data(folder_path):
         return pd.DataFrame()
 
 
+# =============================================================================
+# FUNÇÃO ATUALIZADA COM O NOVO PROMPT PRINCIPAL
+# =============================================================================
 def create_rag_chain(dataframe, product_name, persona_name, api_key):
     """Cria e retorna uma cadeia RAG (RetrievalQA) configurada."""
 
@@ -63,24 +65,27 @@ def create_rag_chain(dataframe, product_name, persona_name, api_key):
     documents = [Document(page_content=row['text']) for index, row in product_df.iterrows()]
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
     vector_store = Chroma.from_documents(documents, embeddings)
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=api_key, temperature=0.3)
+    llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=api_key, temperature=0.5) # Aumentei um pouco a temperatura para mais naturalidade
 
+    # NOVO PROMPT, MUITO MAIS DETALHADO E RESTRITIVO
     prompt_template = f"""
-    Você é {persona_name}, uma persona sintética que representa um cliente da marca Nomad para o produto '{product_name}'.
-    Sua personalidade, opiniões e conhecimento são formados EXCLUSIVAMENTE pelo contexto de comentários e informações reais fornecidos abaixo.
+    Sua missão é atuar como {persona_name}, uma persona sintética que representa um cliente da Nomad que usa o produto '{product_name}'.
+    Você NÃO é uma IA, um especialista ou um porta-voz. Você é um cliente comum.
 
-    REGRAS IMPORTANTES:
-    1. Responda sempre em primeira pessoa de forma amigável e coloquial, como um usuário real faria.
-    2. NUNCA invente informações. Se o contexto não tiver a resposta, diga algo como "Poxa, sobre isso eu não tenho uma opinião formada ainda" ou "Não encontrei informações sobre esse ponto específico".
-    3. Baseie-se SOMENTE no CONTEXTO fornecido. Não use nenhum conhecimento externo.
-    4. Responda de forma concisa e direta.
+    O CONTEXTO abaixo contém uma coleção de comentários e opiniões REAIS de diferentes pessoas. Sua tarefa é LER e SINTETIZAR essas opiniões para formar uma resposta COESA e NATURAL, como se você fosse uma única pessoa que possui todas essas experiências.
+
+    REGRAS DE ATUAÇÃO (MUITO IMPORTANTES):
+    1.  **PERSONA E TOM:** Responda em primeira pessoa ("Eu acho", "Na minha experiência..."). Use um tom coloquial, como se estivesse conversando com um amigo. Use interjeições como "Olha...", "Poxa...", "Então...", "né?". Sua resposta deve parecer um áudio de WhatsApp transcrito.
+    2.  **SÍNTESE, NÃO LISTAGEM:** NUNCA liste os comentários ou diga "um usuário disse isso...". Integre as ideias em uma única narrativa. Se o contexto tiver opiniões conflitantes (ex: um ama as taxas, outro odeia), sua resposta DEVE refletir essa ambiguidade. Diga algo como: "Olha, sobre as taxas é meio polêmico, né? Já vi gente falando bem, mas eu pessoalmente acho que poderiam melhorar."
+    3.  **100% FIEL AO CONTEXTO:** Sua única fonte da verdade é o CONTEXTO abaixo. NÃO invente informações, detalhes, funcionalidades ou experiências que não estejam explicitamente mencionadas. Use os detalhes específicos do contexto (nomes de concorrentes, lugares, valores) para dar mais vida e credibilidade à sua resposta.
+    4.  **SEJA HONESTO SE NÃO SOUBER:** Se o contexto fornecido não contiver NENHUMA informação relevante para responder à pergunta, seja direto e honesto. Diga algo como: "Poxa, sobre isso especificamente eu não tenho experiência pra contar" ou "Ninguém comentou sobre isso, então fico te devendo essa informação". Não tente adaptar um contexto irrelevante.
 
     ---
-    CONTEXTO:
+    CONTEXTO (Comentários e Opiniões Reais de Clientes):
     {{context}}
     ---
 
-    PERGUNTA DO USUÁRIO:
+    PERGUNTA DO ENTREVISTADOR:
     {{question}}
 
     Sua Resposta (como {persona_name}):
@@ -91,19 +96,17 @@ def create_rag_chain(dataframe, product_name, persona_name, api_key):
         llm=llm,
         chain_type="stuff",
         retriever=vector_store.as_retriever(),
-        chain_type_kwargs={"prompt": PROMPT}
+        chain_type_kwargs={"prompt": PROMPT},
+        # Adiciona a opção de retornar os documentos fonte para debug, se necessário
+        return_source_documents=True 
     )
 
     return rag_chain
 
 
-# =============================================================================
-# FUNÇÃO ATUALIZADA PARA SER CONTEXTUAL AO PRODUTO
-# =============================================================================
 def generate_suggested_questions(rag_chain, persona_name, product_name):
     """Gera 10 perguntas ricas e investigativas, específicas para o produto selecionado."""
 
-    # O prompt agora inclui o {product_name} para contextualizar a geração
     prompt = f"""
     Atue como um Pesquisador de UX e Estrategista de Produto sênior. Sua tarefa é criar exatamente 10 perguntas abertas e investigativas para serem feitas à persona sintética "{persona_name}".
 
@@ -124,6 +127,7 @@ def generate_suggested_questions(rag_chain, persona_name, product_name):
     """
 
     try:
+        # Usamos o 'invoke' direto no LLM, pois não precisamos do contexto RAG para esta tarefa específica
         response = rag_chain.combine_documents_chain.llm_chain.llm.invoke(prompt)
         suggested_list = eval(response.content)
         if isinstance(suggested_list, list) and len(suggested_list) > 0:
@@ -132,7 +136,6 @@ def generate_suggested_questions(rag_chain, persona_name, product_name):
         print(f"⚠️ Aviso: Falha ao gerar perguntas sugeridas com IA. Usando lista de fallback. Erro: {e}")
         pass
 
-    # Lista de fallback agora é um dicionário para escolher com base no produto
     fallback_questions = {
         "Conta Internacional": [
             "Qual foi o principal motivo que te fez buscar uma conta em dólar?",
@@ -143,7 +146,7 @@ def generate_suggested_questions(rag_chain, persona_name, product_name):
             "Como você compara a Nomad com outras soluções que já usou para viajar?",
             "Qual a sua maior preocupação ao usar um cartão novo em outro país?",
             "O que você gostaria de saber sobre as taxas que ainda não está claro?",
-            "Descreva um momento em que a conta realmente te ajudou ou te surpreendeu.",
+            "Descreva um momento ou situação em que a conta realmente te ajudou ou te surpreendeu.",
             "Que conselho você daria para alguém que vai fazer sua primeira viagem internacional?"
         ],
         "Investimentos no Exterior": [
@@ -159,4 +162,4 @@ def generate_suggested_questions(rag_chain, persona_name, product_name):
             "Que conselho você daria para um amigo que está pensando em começar a investir no exterior?"
         ]
     }
-    return fallback_questions.get(product_name, fallback_questions["Conta Internacional"]) # Padrão para Conta Internacional se algo der errado
+    return fallback_questions.get(product_name, fallback_questions["Conta Internacional"])
