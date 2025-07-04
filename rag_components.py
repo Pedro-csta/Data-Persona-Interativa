@@ -10,6 +10,10 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGener
 from langchain_community.vectorstores import Chroma
 from langchain.prompts import PromptTemplate
 from langchain.chains import ConversationalRetrievalChain
+
+# MUDANÇA: Importando as classes que faltavam
+from langchain_core.pydantic_v1 import BaseModel, Field
+
 from langgraph.graph import StateGraph, END
 
 # FIX for ChromaDB/SQLite on Streamlit Cloud
@@ -17,13 +21,21 @@ __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
+
+# --- Definição do Estado e Estruturas de Dados ---
 class AgentState(TypedDict):
     question: str
     chat_history: list
     product_name: str
     persona_name: str
     documents: List[Document]
+    search_queries: List[str] # Adicionando a chave que faltava no estado
     final_answer: str
+
+# Estrutura de saída para o agente que analisa a pergunta
+class DecomposedQuery(BaseModel):
+    search_queries: List[str] = Field(description="Uma lista de 2 a 3 strings de busca otimizadas e específicas para encontrar a melhor informação na base de conhecimento.")
+
 
 @cache_data
 def load_and_preprocess_data(folder_path):
@@ -31,14 +43,17 @@ def load_and_preprocess_data(folder_path):
     try:
         filenames = os.listdir(folder_path)
     except FileNotFoundError: return pd.DataFrame()
+
     for filename in filenames:
         if filename.endswith('.csv'):
             file_path = os.path.join(folder_path, filename)
             try:
                 df = pd.read_csv(file_path)
                 if "text" in df.columns and "product" in df.columns:
-                    if filename == 'info_oficial.csv': df['text'] = '[FONTE OFICIAL]: ' + df['text'].astype(str)
-                    else: df['text'] = '[OPINIÃO DE USUÁRIO]: ' + df['text'].astype(str)
+                    if filename == 'info_oficial.csv':
+                        df['text'] = '[FONTE OFICIAL]: ' + df['text'].astype(str)
+                    else:
+                        df['text'] = '[OPINIÃO DE USUÁRIO]: ' + df['text'].astype(str)
                     all_dataframes.append(df)
             except Exception as e: print(f"Erro ao ler '{filename}': {e}")
     if all_dataframes: return pd.concat(all_dataframes, ignore_index=True)
@@ -54,15 +69,19 @@ def get_retriever(_dataframe, product_name, api_key):
     vector_store = Chroma.from_documents(documents, embeddings)
     return vector_store.as_retriever(search_type="mmr", search_kwargs={'k': 8, 'fetch_k': 25})
 
+
+# --- Nós (Agentes) do Grafo ---
+
 def query_analyzer_node(state: AgentState, llm):
     print("--- Agente: Analista de Consulta ---")
-    prompt = f"""Sua tarefa é atuar como um especialista em buscas. Analise a pergunta do usuário e o histórico da conversa para gerar de 2 a 3 variações de busca otimizadas.
+    prompt = f"""
+    Sua tarefa é atuar como um especialista em buscas. Analise a pergunta do usuário e o histórico da conversa para gerar de 2 a 3 variações de busca otimizadas para encontrar as informações mais relevantes em uma base de conhecimento.
     Histórico: {state['chat_history']}
-    Pergunta do Usuário: {state['question']}"""
-    class DecomposedQuery(BaseModel):
-        search_queries: List[str] = Field(description="Uma lista de 2 a 3 strings de busca otimizadas.")
+    Pergunta do Usuário: {state['question']}
+    """
     structured_llm = llm.with_structured_output(DecomposedQuery)
     response = structured_llm.invoke(prompt)
+    print(f"-> Buscas geradas: {response.search_queries}")
     return {"documents": [], "search_queries": response.search_queries}
 
 def retrieval_node(state: AgentState, retriever):
@@ -72,18 +91,22 @@ def retrieval_node(state: AgentState, retriever):
         docs = retriever.invoke(query)
         all_docs.extend(docs)
     unique_docs = {doc.page_content: doc for doc in all_docs}.values()
+    print(f"-> Documentos encontrados: {len(unique_docs)}")
     return {"documents": list(unique_docs)}
 
 def synthesis_node(state: AgentState, llm):
     print("--- Agente: Sintetizador (Persona) ---")
-    prompt_template = f"""Sua única tarefa é atuar como {state['persona_name']}, um cliente comum da Nomad que usa o produto '{state['product_name']}'. Você deve responder à "PERGUNTA ATUAL" usando as informações do "CONTEXTO" e do "HISTÓRICO DA CONVERSA".
+    prompt_template = f"""
+    Sua única tarefa é atuar como {state['persona_name']}, um cliente comum da Nomad que usa o produto '{state['product_name']}'. Você deve responder à "PERGUNTA ATUAL" usando as informações do "CONTEXTO" e do "HISTÓRICO DA CONVERSA".
     Seu tom deve ser coloquial, equilibrado e construtivo. Varie o início das suas respostas. Sintetize as informações de forma natural. Se a informação não estiver disponível, admita que não sabe.
     REGRA CRÍTICA - HIERARQUIA: Para fatos sobre o produto, priorize o contexto `[FONTE OFICIAL]`. Para experiências, use `[OPINIÃO DE USUÁRIO]`. Se houver conflito, comente sobre isso.
     HISTÓRICO DA CONVERSA: {state['chat_history']}
     CONTEXTO: {state['documents']}
     PERGUNTA ATUAL: {state['question']}
-    Sua Resposta Natural (como {state['persona_name']}):"""
+    Sua Resposta Natural (como {state['persona_name']}):
+    """
     response = llm.invoke(prompt_template)
+    print("-> Resposta final gerada.")
     return {"final_answer": response.content}
 
 def create_agentic_rag_app(retriever, api_key):
@@ -101,7 +124,7 @@ def create_agentic_rag_app(retriever, api_key):
     workflow.add_edge("synthesizer", END)
     return workflow.compile()
 
-# MUDANÇA: A função agora recebe a api_key e cria seu próprio LLM. Fica mais independente.
+
 @cache_data(show_spinner=False)
 def generate_suggested_questions(api_key, persona_name, product_name):
     llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0.5)
