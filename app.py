@@ -13,7 +13,11 @@ st.set_page_config(
 # --- Gerenciamento de Estado da Sessão ---
 if 'screen' not in st.session_state:
     st.session_state.screen = 'home'
-    # ... (inicialização de outros estados, se necessário)
+    st.session_state.messages = []
+    st.session_state.question_count = 0
+    st.session_state.rag_chain = None
+    st.session_state.persona_name = ""
+    st.session_state.suggested_questions = []
 
 # =============================================================================
 # TELA 1: HOME / SELEÇÃO
@@ -23,38 +27,41 @@ def render_home_screen():
     st.markdown("""
     Bem-vindo à ferramenta de **Data Persona Interativa**. Esta aplicação utiliza um modelo de linguagem avançado 
     (Google Gemini) sob a arquitetura **RAG (Retrieval-Augmented Generation)**. 
-
+    
     Isso significa que a persona com quem você irá conversar não usa o conhecimento geral da internet, 
     mas sim uma **base de dados real e exclusiva** sobre clientes da marca, garantindo insights autênticos e focados.
     """)
     st.divider()
 
+    # Bloco corrigido para seleção da marca
     st.selectbox(
-    'Selecione a Marca:',
-    ('Nomad',) # Apenas a opção 'Nomad' é selecionável
-)
-st.caption("Em breve: Integração com Wise e Avenue.")
+        'Selecione a Marca:',
+        ('Nomad',), # Apenas a opção 'Nomad' é selecionável
+        help="Para esta versão Beta, apenas a marca Nomad está disponível."
     )
-
+    st.caption("Em breve: Integração com Wise e Avenue.") # Informa sobre o futuro
+    
+    # Como só temos Nomad, definimos a variável manualmente para o resto do código
+    selected_brand = "Nomad" 
+    
     selected_product = st.selectbox(
         'Selecione o Produto para a Persona:',
         ('Conta Internacional', 'Investimentos no Exterior')
     )
 
     if st.button("Iniciar Entrevista", type="primary"):
-        # **MUDANÇA IMPORTANTE AQUI**
         # Busca a chave da API dos segredos do Streamlit
         if "GEMINI_API_KEY" not in st.secrets:
             st.error("Chave da API não configurada. O admin do app precisa adicioná-la nos segredos do Streamlit Cloud.")
             st.stop()
-
+        
         api_key = st.secrets["GEMINI_API_KEY"]
 
         with st.spinner("Preparando a persona... Isso pode levar um momento."):
             full_data = load_and_preprocess_data("data/knowledge_base_nomad.csv")
             st.session_state.persona_name = PERSONA_NAMES[selected_product]
             rag_chain = create_rag_chain(full_data, selected_product, st.session_state.persona_name, api_key)
-
+            
             if rag_chain is None:
                 st.error(f"Não foram encontrados dados para o produto '{selected_product}'. Verifique seu arquivo CSV.")
             else:
@@ -76,10 +83,13 @@ def render_chat_screen():
     col1, col2 = st.columns([3, 1])
 
     with col1:
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
+        # Exibir histórico de mensagens
+        if 'messages' in st.session_state:
+            for message in st.session_state.messages:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
 
+        # Input do usuário
         if st.session_state.question_count < 5:
             if prompt := st.chat_input("Digite para conversar!"):
                 st.session_state.messages.append({"role": "user", "content": prompt})
@@ -90,28 +100,45 @@ def render_chat_screen():
                     with st.spinner("Pensando..."):
                         response = st.session_state.rag_chain.invoke(prompt)
                         st.markdown(response['result'])
-
+                
                 st.session_state.messages.append({"role": "assistant", "content": response['result']})
                 st.session_state.question_count += 1
                 st.rerun()
         else:
-            st.warning("Você atingiu o limite de 5 perguntas. Inicie uma nova entrevista.")
+            st.warning("Você atingiu o limite de 5 perguntas para esta sessão. Inicie uma nova entrevista.")
 
     with col2:
         with st.container(border=True):
             st.subheader("Tópicos sugeridos:")
             if 'suggested_questions' in st.session_state and st.session_state.suggested_questions:
-                for question in st.session_state.suggested_questions:
-                    if st.button(question, use_container_width=True, key=question):
+                for i, question in enumerate(st.session_state.suggested_questions):
+                    if st.button(question, use_container_width=True, key=f"suggestion_{i}"):
+                        # Lógica para lidar com o clique do botão de sugestão
                         st.session_state.messages.append({"role": "user", "content": question})
-                        # ... (resto da lógica do botão)
+                        with st.chat_message("user"):
+                            st.markdown(question)
+
+                        with st.chat_message("assistant"):
+                            with st.spinner("Pensando..."):
+                                response = st.session_state.rag_chain.invoke(question)
+                                st.markdown(response['result'])
+                        
+                        st.session_state.messages.append({"role": "assistant", "content": response['result']})
+                        st.session_state.question_count += 1
                         st.rerun()
 
     if st.button("⬅️ Iniciar Nova Entrevista"):
         st.session_state.screen = 'home'
+        # Limpar estado da sessão anterior para uma nova entrevista limpa
+        for key in list(st.session_state.keys()):
+            if key != 'screen':
+                del st.session_state[key]
         st.rerun()
 
-# --- Lógica Principal ---
+# --- Lógica Principal para Alternar Telas ---
+if 'screen' not in st.session_state:
+    st.session_state.screen = 'home'
+
 if st.session_state.screen == 'home':
     render_home_screen()
 elif st.session_state.screen == 'chat':
