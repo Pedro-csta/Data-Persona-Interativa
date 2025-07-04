@@ -4,7 +4,8 @@ import os
 import pandas as pd
 from streamlit import cache_data, cache_resource
 from langchain.docstore.document import Document
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogle_GenerativeAI
+# CORREÇÃO DO BUG AQUI: Corrigindo o nome da classe importada
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import Chroma
 from langchain.prompts import PromptTemplate
 from langchain.chains import ConversationalRetrievalChain
@@ -42,14 +43,11 @@ def load_and_preprocess_data(folder_path):
         return pd.DataFrame()
 
 
-# =============================================================================
-# FUNÇÃO ATUALIZADA PARA USAR O RETRIEVER COM MMR
-# =============================================================================
 @cache_resource(show_spinner=False)
 def get_retriever(_dataframe, product_name, api_key):
     """
     Função dedicada e otimizada para criar e cachear o retriever,
-    agora usando a busca MMR para garantir diversidade de contexto.
+    usando a busca MMR para garantir diversidade de contexto.
     """
     print(f"Criando ou carregando retriever do cache para o produto: {product_name}")
     
@@ -61,11 +59,9 @@ def get_retriever(_dataframe, product_name, api_key):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
     vector_store = Chroma.from_documents(documents, embeddings)
     
-    # MUDANÇA FUNDAMENTAL: Usando Maximum Marginal Relevance (MMR)
-    # Isso força a busca a trazer resultados relevantes, mas também DIVERSOS.
     retriever = vector_store.as_retriever(
         search_type="mmr",
-        search_kwargs={'k': 6, 'fetch_k': 20} # Busca 20 docs, mas seleciona os 6 mais diversos e relevantes.
+        search_kwargs={'k': 6, 'fetch_k': 20}
     )
     
     return retriever
@@ -78,6 +74,7 @@ def create_rag_chain(retriever, product_name, persona_name, api_key):
     if retriever is None:
         return None
 
+    # CORREÇÃO DO BUG AQUI: Usando o nome correto da classe
     llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=api_key, temperature=0.4)
 
     prompt_template = f"""
