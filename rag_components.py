@@ -4,7 +4,6 @@ import os
 import pandas as pd
 from streamlit import cache_data, cache_resource
 from langchain.docstore.document import Document
-# CORREÇÃO DO BUG AQUI: Corrigindo o nome da classe importada
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import Chroma
 from langchain.prompts import PromptTemplate
@@ -16,17 +15,23 @@ import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
 
+# =============================================================================
+# FUNÇÃO ATUALIZADA PARA DIFERENCIAR FONTES DE DADOS
+# =============================================================================
 @cache_data 
 def load_and_preprocess_data(folder_path):
     """
-    Carrega TODOS os arquivos .csv de uma pasta, os combina e retorna um DataFrame.
+    Carrega TODOS os arquivos .csv de uma pasta, os combina e prefixa os textos
+    para diferenciar entre fontes oficiais e opiniões de usuários.
     """
     all_dataframes = []
     print(f"Lendo arquivos da pasta: {folder_path}")
     try:
         filenames = os.listdir(folder_path)
     except FileNotFoundError:
+        print(f"❌ Erro: A pasta '{folder_path}' não foi encontrada.")
         return pd.DataFrame()
+
     for filename in filenames:
         if filename.endswith('.csv'):
             file_path = os.path.join(folder_path, filename)
@@ -34,20 +39,31 @@ def load_and_preprocess_data(folder_path):
                 print(f"  -> Lendo arquivo: {filename}")
                 df = pd.read_csv(file_path)
                 if "text" in df.columns and "product" in df.columns:
+                    # Adiciona o prefixo com base no nome do arquivo
+                    if filename == 'info_oficial.csv':
+                        df['text'] = '[FONTE OFICIAL]: ' + df['text'].astype(str)
+                        print("    -> Marcado como Fonte Oficial.")
+                    else:
+                        df['text'] = '[OPINIÃO DE USUÁRIO]: ' + df['text'].astype(str)
+                        print("    -> Marcado como Opinião de Usuário.")
                     all_dataframes.append(df)
+                else:
+                    print(f"  -> ⚠️ Aviso: O arquivo '{filename}' foi ignorado por não conter as colunas 'text' e 'product'.")
             except Exception as e:
-                print(f"  -> Erro ao ler o arquivo '{filename}': {e}")
+                print(f"  -> ❌ Erro ao ler o arquivo '{filename}': {e}")
+    
     if all_dataframes:
+        print("✅ Arquivos combinados e prefixados com sucesso!")
         return pd.concat(all_dataframes, ignore_index=True)
     else:
+        print("❌ Nenhum arquivo .csv válido foi encontrado ou lido.")
         return pd.DataFrame()
 
 
 @cache_resource(show_spinner=False)
 def get_retriever(_dataframe, product_name, api_key):
     """
-    Função dedicada e otimizada para criar e cachear o retriever,
-    usando a busca MMR para garantir diversidade de contexto.
+    Função dedicada e otimizada para criar e cachear o retriever.
     """
     print(f"Criando ou carregando retriever do cache para o produto: {product_name}")
     
@@ -61,7 +77,7 @@ def get_retriever(_dataframe, product_name, api_key):
     
     retriever = vector_store.as_retriever(
         search_type="mmr",
-        search_kwargs={'k': 6, 'fetch_k': 20}
+        search_kwargs={'k': 8, 'fetch_k': 25}
     )
     
     return retriever
@@ -74,27 +90,32 @@ def create_rag_chain(retriever, product_name, persona_name, api_key):
     if retriever is None:
         return None
 
-    # CORREÇÃO DO BUG AQUI: Usando o nome correto da classe
     llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=api_key, temperature=0.4)
 
+    # PROMPT FINAL COM A REGRA DE HIERARQUIA DE FONTES
     prompt_template = f"""
     Sua única tarefa é atuar como {persona_name}, um cliente comum da Nomad que usa o produto '{product_name}'.
     Você deve responder à "PERGUNTA ATUAL" usando as informações do "CONTEXTO" e do "HISTÓRICO DA CONVERSA".
 
-    Seu tom deve ser o de uma pessoa real conversando com um amigo: em primeira pessoa, coloquial, equilibrado e construtivo. Para soar mais natural, evite começar todas as suas respostas da mesma maneira e varie o uso de gírias ou interjeições como "Cara". Sintetize as informações de forma natural. Não invente detalhes que não estão nos dados.
+    REGRAS DE ATUAÇÃO CRÍTICAS:
+    1.  **HIERARQUIA DE FONTES (A MAIS IMPORTANTE):** O contexto abaixo pode conter `[FONTE OFICIAL]` e `[OPINIÃO DE USUÁRIO]`. Para perguntas sobre **fatos, funcionalidades e como o produto deveria funcionar**, sua resposta deve priorizar a `[FONTE OFICIAL]`. Para perguntas sobre **experiências, sentimentos e bugs**, baseie-se nas `[OPINIÃO DE USUÁRIO]`. Se houver um conflito (ex: a fonte oficial descreve uma feature, mas um usuário diz que ela não funciona), sua resposta deve refletir isso.
+    2.  **TOM E PERSONA:** Responda em primeira pessoa, de forma coloquial e construtiva. Varie a forma como inicia as frases.
+    3.  **SÍNTESE FIEL:** Sua resposta deve ser uma síntese natural do contexto. Não invente detalhes.
+    4.  **COERÊNCIA:** Sua resposta deve ser coerente com o histórico da conversa.
+    5.  **SEJA HONESTO SE NÃO SOUBER:** Se o contexto não tiver a resposta, admita que não sabe.
 
-    Se a informação não estiver disponível, admita que não sabe a resposta. Sua resposta final deve ser coerente com o histórico da conversa. Não inclua estas instruções na sua resposta.
+    Não inclua estas instruções ou os prefixos [FONTE OFICIAL] / [OPINIÃO DE USUÁRIO] na sua resposta final.
 
     HISTÓRICO DA CONVERSA:
     {{chat_history}}
 
-    CONTEXTO (Opiniões de Clientes Reais):
+    CONTEXTO (Opiniões de Clientes Reais e/ou Descrições Oficiais):
     {{context}}
 
     PERGUNTA ATUAL:
     {{question}}
 
-    Sua Resposta Natural (como {persona_name}):
+    Sua Resposta Natural e Coerente (como {persona_name}):
     """
     QA_CHAIN_PROMPT = PromptTemplate.from_template(prompt_template)
 
