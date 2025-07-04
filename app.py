@@ -29,7 +29,7 @@ def render_footer():
 # =============================================================================
 def render_home_screen():
     # --- TEXTO FINAL DE APRESENTAÇÃO ---
-    st.title("Data Persona Interativa: O Diálogo Direto com Seus Dados")
+    st.title("Data Persona Interativa 💬")
     
     st.markdown("""
     Esta aplicação cria uma persona interativa e 100% data-driven, utilizando a arquitetura **RAG (Retrieval-Augmented Generation)** e um modelo de linguagem avançado. Diferente de um chatbot, ela responde exclusivamente com base no conhecimento que você fornece (pesquisas, social listening, reviews), garantindo insights autênticos e focados.
