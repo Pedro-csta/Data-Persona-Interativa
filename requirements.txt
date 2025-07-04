@@ -6,3 +6,4 @@ langchain-community
 pandas
 chromadb
 numpy
+pysqlite3-binary
