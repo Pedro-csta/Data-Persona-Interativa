@@ -20,11 +20,14 @@ def render_footer():
 
 def render_home_screen():
     st.title("Data Persona Interativa 💬")
-    # ... (o resto do texto de apresentação permanece o mesmo) ...
+    
+    # --- BLOCO DE TEXTO RESTAURADO ---
     st.markdown("""
-    Esta aplicação cria uma persona interativa e 100% data-driven...
-    Seu verdadeiro poder é a autonomia...
-    É o Martech aplicado na prática...
+    Esta aplicação cria uma persona interativa e 100% data-driven, utilizando a arquitetura **RAG (Retrieval-Augmented Generation)** e um modelo de linguagem avançado. Diferente de um chatbot, ela responde exclusivamente com base no conhecimento que você fornece (pesquisas, social listening, reviews), garantindo insights autênticos e focados.
+
+    Seu verdadeiro poder é a **autonomia**. Em vez de iniciar um novo ciclo de análise para cada pergunta, a ferramenta transforma seus dados estáticos em um **ativo conversacional**. Explore os resultados de suas pesquisas ou os comentários de redes sociais usando linguagem natural, a qualquer hora.
+
+    É o Martech aplicado na prática: um recurso para que times de Marketing e Produto validem premissas e aprofundem a empatia com o cliente de forma ágil e sem intermediários.
     """)
     with st.expander("⚙️ Conheça o maquinário por trás da mágica"):
         st.markdown("""
@@ -35,6 +38,7 @@ def render_home_screen():
         - **Base de Dados Vetorial:** `ChromaDB (in-memory)`
         """)
     st.divider()
+    
     st.selectbox('Selecione a Marca:', ('Nomad',), help="Para esta versão Beta, apenas a marca Nomad está disponível.")
     selected_product = st.selectbox(
         'Selecione o Produto para a Persona:',
@@ -54,11 +58,13 @@ def render_home_screen():
             retriever = get_retriever(full_data, selected_product, api_key)
             if retriever is None: st.error(f"Não há dados para o produto '{selected_product}'."); st.stop()
             
-            # Cria e armazena o aplicativo de agentes na sessão
             st.session_state.agentic_app = create_agentic_rag_app(retriever, api_key)
             st.session_state.persona_name = PERSONA_NAMES[selected_product]
-            st.session_state.product_name = selected_product # Armazena o produto para o prompt
-            st.session_state.suggested_questions = generate_suggested_questions(api_key, st.session_state.persona_name, selected_product)
+            st.session_state.product_name = selected_product
+            
+            # Precisamos do LLM para gerar as perguntas, então o criamos aqui temporariamente
+            llm_for_questions = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0.5)
+            st.session_state.suggested_questions = generate_suggested_questions(llm_for_questions, st.session_state.persona_name, selected_product)
             
             st.session_state.screen = 'chat'
             st.session_state.messages = []
@@ -68,7 +74,6 @@ def render_home_screen():
 def handle_new_message(prompt):
     st.session_state.messages.append({"role": "user", "content": prompt})
     
-    # Prepara o payload para o grafo de agentes
     payload = {
         "question": prompt,
         "chat_history": [(msg["role"], msg["content"]) for msg in st.session_state.messages[:-1]],
@@ -78,35 +83,63 @@ def handle_new_message(prompt):
     
     with st.chat_message("assistant"):
         with st.spinner("A equipe de agentes está pensando..."):
-            # Invoca o grafo de agentes
             final_state = st.session_state.agentic_app.invoke(payload)
-            response_content = final_state['final_answer']
+            response_content = final_state.get('final_answer', "Desculpe, não consegui processar uma resposta.")
+            source_documents = final_state.get('documents', [])
+            
             st.markdown(response_content)
-            # Adiciona as fontes para depuração
-            with st.expander("Ver fontes utilizadas"):
-                for doc in final_state['documents']:
-                    st.info(doc.page_content)
+            
+            if source_documents:
+                with st.expander("Ver fontes utilizadas"):
+                    for doc in source_documents:
+                        st.info(doc.page_content)
 
-    st.session_state.messages.append({"role": "assistant", "content": response_content})
+    st.session_state.messages.append({
+        "role": "assistant", 
+        "content": response_content,
+        "sources": source_documents
+    })
 
 def render_chat_screen():
     st.title(f"Entrevistando: {st.session_state.persona_name}")
     st.markdown(f"Você pode fazer até **5** perguntas. Esta é uma demonstração.")
     st.divider()
 
-    # Exibe o histórico de mensagens
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    # --- LÓGICA DAS COLUNAS RESTAURADA ---
+    col1, col2 = st.columns([2, 1])
 
-    # Lida com o input do usuário
-    if len(st.session_state.messages) < 10: # Limite de 5 perguntas (5 pares de user/assistant)
+    with col1:
+        # Exibe o histórico de mensagens
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+                if message["role"] == "assistant" and "sources" in message and message["sources"]:
+                    with st.expander("Ver fontes utilizadas"):
+                        for doc in message["sources"]:
+                            st.info(doc.page_content)
+
+    # Colocando o input do chat fora da coluna para ocupar a largura total
+    if len(st.session_state.messages) < 10: 
         if prompt := st.chat_input("Digite para conversar!"):
             handle_new_message(prompt)
             st.rerun()
     else:
         st.warning("Você atingiu o limite de perguntas para esta demonstração.")
 
+    with col2:
+        # --- LÓGICA DA COLUNA DE SUGESTÕES RESTAURADA ---
+        with st.container(border=True):
+            st.subheader("Tópicos sugeridos:")
+            if 'suggested_questions' in st.session_state and st.session_state.suggested_questions:
+                for i, question in enumerate(st.session_state.suggested_questions):
+                    if len(st.session_state.messages) < 10:
+                        if st.button(question, use_container_width=True, key=f"suggestion_{i}"):
+                            handle_new_message(question)
+                            st.rerun()
+                    else:
+                        st.button(question, use_container_width=True, key=f"suggestion_{i}", disabled=True)
+
+    st.divider()
     if st.button("⬅️ Iniciar Nova Entrevista"):
         keys_to_clear = ['messages', 'agentic_app', 'persona_name', 'product_name', 'suggested_questions']
         for key in keys_to_clear:
