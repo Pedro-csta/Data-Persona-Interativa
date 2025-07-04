@@ -28,20 +28,19 @@ def render_footer():
 # TELA 1: HOME / SELEÇÃO
 # =============================================================================
 def render_home_screen():
-    # --- NOVO TEXTO DE APRESENTAÇÃO ---
-    st.title("Data Persona Interativa 💬")
-    st.subheader("Uma ponte de empatia entre sua marca e seus clientes")
+    # --- TEXTO FINAL DE APRESENTAÇÃO ---
+    st.title("Data Persona Interativa: O Diálogo Direto com Seus Dados")
     
     st.markdown("""
-    Esta ferramenta foi desenvolvida com uma lógica de **Marketing de Produto** para empoderar times de **Marketing, Produto e Vendas**. 
-    Converse com uma representação fiel do seu público-alvo para validar hipóteses, testar narrativas, refinar a comunicação e 
-    tomar decisões mais rápidas e seguras, sempre com base em dados reais. É um artifício *data-driven* para o seu trabalho do dia a dia.
+    Esta aplicação cria uma persona interativa e 100% data-driven, utilizando a arquitetura **RAG (Retrieval-Augmented Generation)** e um modelo de linguagem avançado. Diferente de um chatbot, ela responde exclusivamente com base no conhecimento que você fornece (pesquisas, social listening, reviews), garantindo insights autênticos e focados.
+
+    Seu verdadeiro poder é a **autonomia**. Em vez de iniciar um novo ciclo de análise para cada pergunta, a ferramenta transforma seus dados estáticos em um **ativo conversacional**. Explore os resultados de suas pesquisas ou os comentários de redes sociais usando linguagem natural, a qualquer hora.
+
+    É o Martech aplicado na prática: um recurso para que times de Marketing e Produto validem premissas e aprofundem a empatia com o cliente de forma ágil e sem intermediários.
     """)
 
     with st.expander("⚙️ Conheça o maquinário por trás da mágica"):
         st.markdown("""
-        A persona é alimentada exclusivamente por uma base de conhecimento real do seu cliente (social listening, pesquisas, reviews, etc.). 
-        Ela não "acha" nada, apenas reflete o que seus dados dizem. Isso é possível através de:
         - **Modelo de Linguagem (LLM):** `Google Gemini 1.5 Pro`
         - **Arquitetura:** `RAG (Retrieval-Augmented Generation)`
         - **Orquestração:** `LangChain`
@@ -54,10 +53,10 @@ def render_home_screen():
     # --- Lógica de Seleção ---
     st.selectbox(
         'Selecione a Marca:',
-        ('Nomad',), # Apenas a opção 'Nomad' é selecionável
+        ('Nomad',), 
         help="Para esta versão Beta, apenas a marca Nomad está disponível."
     )
-    st.caption("Em breve: Integração com Wise e Avenue.") # Informa sobre o futuro
+    st.caption("Em breve: Integração com Wise e Avenue.")
     
     selected_brand = "Nomad" 
     
