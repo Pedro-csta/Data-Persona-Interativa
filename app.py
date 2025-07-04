@@ -29,7 +29,7 @@ def render_footer():
 # =============================================================================
 def render_home_screen():
     st.title("Data Persona Interativa: O Diálogo Direto com Seus Dados")
-    
+
     st.markdown("""
     Esta aplicação cria uma persona interativa e 100% data-driven, utilizando a arquitetura **RAG (Retrieval-Augmented Generation)** e um modelo de linguagem avançado. Diferente de um chatbot, ela responde exclusivamente com base no conhecimento que você fornece (pesquisas, social listening, reviews), garantindo insights autênticos e focados.
 
@@ -46,18 +46,18 @@ def render_home_screen():
         - **Interface e Aplicação:** `Python + Streamlit`
         - **Base de Dados Vetorial:** `ChromaDB (in-memory)`
         """)
-    
+
     st.divider()
 
     st.selectbox(
         'Selecione a Marca:',
-        ('Nomad',), 
+        ('Nomad',),
         help="Para esta versão Beta, apenas a marca Nomad está disponível."
     )
     st.caption("Em breve: Integração com Wise e Avenue.")
-    
-    selected_brand = "Nomad" 
-    
+
+    selected_brand = "Nomad"
+
     selected_product = st.selectbox(
         'Selecione o Produto para a Persona:',
         ('Conta Internacional', 'Investimentos no Exterior')
@@ -67,26 +67,25 @@ def render_home_screen():
         if "GEMINI_API_KEY" not in st.secrets:
             st.error("Chave da API não configurada. O admin do app precisa adicioná-la nos segredos do Streamlit Cloud.")
             st.stop()
-        
+
         api_key = st.secrets["GEMINI_API_KEY"]
 
         with st.spinner("Preparando a persona... Isso pode levar um momento."):
-            # MUDANÇA AQUI: Apontamos para a pasta 'data' em vez de um arquivo específico
             full_data = load_and_preprocess_data("data")
-            
-            # Verifica se algum dado foi carregado
+
             if full_data.empty:
                 st.error("Nenhum dado válido encontrado na pasta 'data'. Verifique se existem arquivos .csv com as colunas 'text' e 'product'.")
                 st.stop()
 
             st.session_state.persona_name = PERSONA_NAMES[selected_product]
             rag_chain = create_rag_chain(full_data, selected_product, st.session_state.persona_name, api_key)
-            
+
             if rag_chain is None:
                 st.error(f"Não foram encontrados dados para o produto '{selected_product}'. Verifique seus arquivos CSV.")
             else:
                 st.session_state.rag_chain = rag_chain
-                st.session_state.suggested_questions = generate_suggested_questions(rag_chain, st.session_state.persona_name)
+                # MUDANÇA AQUI: Passando o 'selected_product' para a função
+                st.session_state.suggested_questions = generate_suggested_questions(rag_chain, st.session_state.persona_name, selected_product)
                 st.session_state.screen = 'chat'
                 st.session_state.messages = []
                 st.session_state.question_count = 0
@@ -120,7 +119,7 @@ def render_chat_screen():
                     with st.spinner("Pensando..."):
                         response = st.session_state.rag_chain.invoke(prompt)
                         st.markdown(response['result'])
-                
+
                 st.session_state.messages.append({"role": "assistant", "content": response['result']})
                 st.session_state.question_count += 1
                 st.rerun()
@@ -141,7 +140,7 @@ def render_chat_screen():
                             with st.spinner("Pensando..."):
                                 response = st.session_state.rag_chain.invoke(question)
                                 st.markdown(response['result'])
-                        
+
                         st.session_state.messages.append({"role": "assistant", "content": response['result']})
                         st.session_state.question_count += 1
                         st.rerun()
