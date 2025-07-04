@@ -1,13 +1,18 @@
 # rag_components.py
 
-import os 
+import os
 import pandas as pd
+from typing import TypedDict, List
 from streamlit import cache_data, cache_resource
+
 from langchain.docstore.document import Document
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import Chroma
 from langchain.prompts import PromptTemplate
-from langchain.chains import ConversationalRetrievalChain
+from langchain_core.pydantic_v1 import BaseModel, Field
+
+# Importações principais do LangGraph
+from langgraph.graph import StateGraph, END
 
 # FIX for ChromaDB/SQLite on Streamlit Cloud
 __import__('pysqlite3')
@@ -15,141 +20,139 @@ import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
 
-# =============================================================================
-# FUNÇÃO ATUALIZADA PARA DIFERENCIAR FONTES DE DADOS
-# =============================================================================
-@cache_data 
+# --- Definição do Estado do Grafo ---
+# O estado é o objeto que flui entre os agentes, carregando todas as informações.
+class AgentState(TypedDict):
+    question: str
+    chat_history: list
+    product_name: str
+    persona_name: str
+    documents: List[Document]
+    final_answer: str
+
+# --- Funções e Classes para os Nós do Grafo ---
+
+# Define a estrutura de saída do nosso primeiro agente
+class DecomposedQuery(BaseModel):
+    search_queries: List[str] = Field(description="Uma lista de 2 a 3 strings de busca otimizadas e específicas para encontrar a melhor informação na base de conhecimento.")
+
+@cache_data
 def load_and_preprocess_data(folder_path):
-    """
-    Carrega TODOS os arquivos .csv de uma pasta, os combina e prefixa os textos
-    para diferenciar entre fontes oficiais e opiniões de usuários.
-    """
     all_dataframes = []
-    print(f"Lendo arquivos da pasta: {folder_path}")
     try:
         filenames = os.listdir(folder_path)
-    except FileNotFoundError:
-        print(f"❌ Erro: A pasta '{folder_path}' não foi encontrada.")
-        return pd.DataFrame()
+    except FileNotFoundError: return pd.DataFrame()
 
     for filename in filenames:
         if filename.endswith('.csv'):
             file_path = os.path.join(folder_path, filename)
             try:
-                print(f"  -> Lendo arquivo: {filename}")
                 df = pd.read_csv(file_path)
                 if "text" in df.columns and "product" in df.columns:
-                    # Adiciona o prefixo com base no nome do arquivo
                     if filename == 'info_oficial.csv':
                         df['text'] = '[FONTE OFICIAL]: ' + df['text'].astype(str)
-                        print("    -> Marcado como Fonte Oficial.")
                     else:
                         df['text'] = '[OPINIÃO DE USUÁRIO]: ' + df['text'].astype(str)
-                        print("    -> Marcado como Opinião de Usuário.")
                     all_dataframes.append(df)
-                else:
-                    print(f"  -> ⚠️ Aviso: O arquivo '{filename}' foi ignorado por não conter as colunas 'text' e 'product'.")
-            except Exception as e:
-                print(f"  -> ❌ Erro ao ler o arquivo '{filename}': {e}")
-    
-    if all_dataframes:
-        print("✅ Arquivos combinados e prefixados com sucesso!")
-        return pd.concat(all_dataframes, ignore_index=True)
-    else:
-        print("❌ Nenhum arquivo .csv válido foi encontrado ou lido.")
-        return pd.DataFrame()
-
+            except Exception as e: print(f"Erro ao ler '{filename}': {e}")
+    if all_dataframes: return pd.concat(all_dataframes, ignore_index=True)
+    return pd.DataFrame()
 
 @cache_resource(show_spinner=False)
 def get_retriever(_dataframe, product_name, api_key):
-    """
-    Função dedicada e otimizada para criar e cachear o retriever.
-    """
-    print(f"Criando ou carregando retriever do cache para o produto: {product_name}")
-    
+    print(f"Carregando retriever para: {product_name}")
     product_df = _dataframe[_dataframe['product'].str.lower() == product_name.lower()].copy()
-    if product_df.empty:
-        return None
-
+    if product_df.empty: return None
     documents = [Document(page_content=row['text']) for index, row in product_df.iterrows()]
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
     vector_store = Chroma.from_documents(documents, embeddings)
-    
-    retriever = vector_store.as_retriever(
-        search_type="mmr",
-        search_kwargs={'k': 8, 'fetch_k': 25}
-    )
-    
-    return retriever
+    return vector_store.as_retriever(search_type="mmr", search_kwargs={'k': 10, 'fetch_k': 30})
 
+# --- NÓ 1: O AGENTE ANALISTA DE CONSULTA ---
+def query_analyzer_node(state: AgentState, llm_query_analyzer):
+    print("--- Agente: Analista de Consulta ---")
+    prompt = f"""
+    Sua tarefa é atuar como um especialista em buscas. Analise a pergunta do usuário e o histórico da conversa para gerar de 2 a 3 variações de busca que sejam otimizadas para encontrar as informações mais relevantes em uma base de conhecimento.
 
-def create_rag_chain(retriever, product_name, persona_name, api_key):
+    Exemplo:
+    Pergunta: "Como as taxas da Nomad se comparam com as da Wise e qual a opinião dos usuários sobre isso?"
+    Saída: ["taxas de serviço Nomad vs Wise", "opinião dos usuários sobre taxas e custos da Nomad", "vantagens e desvantagens das taxas da Nomad"]
+
+    Histórico: {state['chat_history']}
+    Pergunta do Usuário: {state['question']}
     """
-    Cria a cadeia conversacional de forma leve, usando um retriever já em cache.
-    """
-    if retriever is None:
-        return None
+    structured_llm = llm_query_analyzer.with_structured_output(DecomposedQuery)
+    response = structured_llm.invoke(prompt)
+    print(f"-> Buscas geradas: {response.search_queries}")
+    return {"documents": [], "search_queries": response.search_queries}
 
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=api_key, temperature=0.4)
+# --- NÓ 2: O AGENTE PESQUISADOR ---
+def retrieval_node(state: AgentState, retriever):
+    print("--- Agente: Pesquisador ---")
+    all_docs = []
+    # Usa as buscas geradas pelo agente anterior para pesquisar na base
+    for query in state["search_queries"]:
+        docs = retriever.invoke(query)
+        all_docs.extend(docs)
+    
+    # Remove duplicatas
+    unique_docs = {doc.page_content: doc for doc in all_docs}.values()
+    print(f"-> Documentos encontrados: {len(unique_docs)}")
+    return {"documents": list(unique_docs)}
 
-    # PROMPT FINAL COM A REGRA DE HIERARQUIA DE FONTES
+# --- NÓ 3: O AGENTE SINTETIZADOR (A PERSONA) ---
+def synthesis_node(state: AgentState, llm_synthesis):
+    print("--- Agente: Sintetizador (Persona) ---")
     prompt_template = f"""
-    Sua única tarefa é atuar como {persona_name}, um cliente comum da Nomad que usa o produto '{product_name}'.
+    Sua única tarefa é atuar como {state['persona_name']}, um cliente comum da Nomad que usa o produto '{state['product_name']}'.
     Você deve responder à "PERGUNTA ATUAL" usando as informações do "CONTEXTO" e do "HISTÓRICO DA CONVERSA".
 
-    REGRAS DE ATUAÇÃO CRÍTICAS:
-    1.  **HIERARQUIA DE FONTES (A MAIS IMPORTANTE):** O contexto abaixo pode conter `[FONTE OFICIAL]` e `[OPINIÃO DE USUÁRIO]`. Para perguntas sobre **fatos, funcionalidades e como o produto deveria funcionar**, sua resposta deve priorizar a `[FONTE OFICIAL]`. Para perguntas sobre **experiências, sentimentos e bugs**, baseie-se nas `[OPINIÃO DE USUÁRIO]`. Se houver um conflito (ex: a fonte oficial descreve uma feature, mas um usuário diz que ela não funciona), sua resposta deve refletir isso.
-    2.  **TOM E PERSONA:** Responda em primeira pessoa, de forma coloquial e construtiva. Varie a forma como inicia as frases.
-    3.  **SÍNTESE FIEL:** Sua resposta deve ser uma síntese natural do contexto. Não invente detalhes.
-    4.  **COERÊNCIA:** Sua resposta deve ser coerente com o histórico da conversa.
-    5.  **SEJA HONESTO SE NÃO SOUBER:** Se o contexto não tiver a resposta, admita que não sabe.
-
-    Não inclua estas instruções ou os prefixos [FONTE OFICIAL] / [OPINIÃO DE USUÁRIO] na sua resposta final.
-
-    HISTÓRICO DA CONVERSA:
-    {{chat_history}}
-
-    CONTEXTO (Opiniões de Clientes Reais e/ou Descrições Oficiais):
-    {{context}}
-
-    PERGUNTA ATUAL:
-    {{question}}
-
-    Sua Resposta Natural e Coerente (como {persona_name}):
-    """
-    QA_CHAIN_PROMPT = PromptTemplate.from_template(prompt_template)
-
-    rag_chain = ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        retriever=retriever,
-        combine_docs_chain_kwargs={'prompt': QA_CHAIN_PROMPT},
-        return_source_documents=True
-    )
-    return rag_chain, llm
-
-
-@cache_data(show_spinner=False)
-def generate_suggested_questions(_llm, persona_name, product_name):
-    """Gera 10 perguntas ricas e investigativas, específicas para o produto selecionado."""
+    Seu tom deve ser o de uma pessoa real conversando com um amigo: em primeira pessoa, coloquial, equilibrado e construtivo.
+    Sintetize as informações de forma natural. Não invente detalhes.
+    Se a informação não estiver disponível, admita que não sabe. Sua resposta final deve ser coerente com o histórico.
     
+    REGRA CRÍTICA - HIERARQUIA: Para fatos sobre o produto, priorize o contexto `[FONTE OFICIAL]`. Para experiências, use `[OPINIÃO DE USUÁRIO]`. Se houver conflito, comente sobre isso.
+
+    HISTÓRICO DA CONVERSA: {state['chat_history']}
+    CONTEXTO (Informações coletadas para você): {state['documents']}
+    PERGUNTA ATUAL: {state['question']}
+    Sua Resposta Natural e Coerente (como {state['persona_name']}):
+    """
+    response = llm_synthesis.invoke(prompt_template)
+    print("-> Resposta final gerada.")
+    return {"final_answer": response.content}
+
+
+# --- FUNÇÃO PRINCIPAL QUE MONTA E RETORNA O GRAFO ---
+def create_agentic_rag_app(retriever, api_key):
+    if retriever is None: return None
+    
+    # Define os LLMs para cada agente
+    llm_query_analyzer = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0)
+    llm_synthesis = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=api_key, temperature=0.4)
+    
+    # Montagem do Grafo
+    workflow = StateGraph(AgentState)
+    workflow.add_node("query_analyzer", lambda state: query_analyzer_node(state, llm_query_analyzer))
+    workflow.add_node("retriever", lambda state: retrieval_node(state, retriever))
+    workflow.add_node("synthesizer", lambda state: synthesis_node(state, llm_synthesis))
+
+    workflow.set_entry_point("query_analyzer")
+    workflow.add_edge("query_analyzer", "retriever")
+    workflow.add_edge("retriever", "synthesizer")
+    workflow.add_edge("synthesizer", END)
+
+    return workflow.compile()
+
+# A função de gerar perguntas sugeridas permanece a mesma e não precisa do grafo
+@cache_data(show_spinner=False)
+def generate_suggested_questions(api_key, persona_name, product_name):
+    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0.5)
     prompt = f"""
-    Atue como um Pesquisador de UX e Estrategista de Produto sênior. Sua tarefa é criar exatamente 10 perguntas abertas e investigativas para serem feitas a um cliente do produto '{product_name}' da Nomad.
-    O objetivo é descobrir insights sobre perfil, necessidades, dores e motivações.
-    Use inícios como "O que passa na sua cabeça quando...", "Descreva sua maior frustração com...", "Como você compara...".
-    Retorne o resultado como uma lista de EXATAMENTE 10 strings em Python.
+    Atue como um Pesquisador de UX. Crie 10 perguntas abertas para um cliente do produto '{product_name}' da Nomad para descobrir insights sobre perfil e dores. Retorne como uma lista Python.
     """
     try:
-        response = _llm.invoke(prompt)
-        suggested_list = eval(response.content)
-        if isinstance(suggested_list, list) and len(suggested_list) > 0:
-            return suggested_list
-    except Exception as e:
-        print(f"⚠️ Aviso: Falha ao gerar perguntas sugeridas com IA. Usando lista de fallback. Erro: {e}")
-        pass
-    
-    fallback_questions = {
-        "Conta Internacional": ["Qual foi o principal motivo que te fez buscar uma conta em dólar?", "Descreva a sua maior dificuldade ao usar seu dinheiro em viagens internacionais.", "O que você mais valoriza em um cartão de viagem: taxas baixas, facilidade de uso ou segurança?", "Como você se planeja financeiramente para uma viagem ao exterior?", "Se você pudesse adicionar uma funcionalidade à conta, qual seria?", "Como você compara a Nomad com outras soluções que já usou para viajar?", "Qual a sua maior preocupação ao usar um cartão novo em outro país?", "O que você gostaria de saber sobre as taxas que ainda não está claro?", "Descreva um momento ou situação em que a conta realmente te ajudou ou te surpreendeu.", "Que conselho você daria para alguém que vai fazer sua primeira viagem internacional?"],
-        "Investimentos no Exterior": ["O que te motivou a começar a investir seu dinheiro fora do Brasil?", "Qual é a sua maior preocupação ou medo ao pensar em investimentos no exterior?", "Descreva como você se sente em relação à volatilidade do mercado de ações americano.", "O que você considera mais importante: a possibilidade de altos retornos ou a segurança dos seus investimentos?", "Como você avalia seu próprio nível de conhecimento sobre ETFs, Ações e Renda Fixa?", "Se você pudesse ter uma informação ou ferramenta a mais para te ajudar a investir, qual seria?", "Como você compara investir pela Nomad com outras corretoras que conhece?", "Qual é a sua maior dificuldade na hora de declarar seus investimentos no Imposto de Renda?", "Descreva o que te dá mais confiança na hora de escolher um ativo para investir.", "Que conselho você daria para um amigo que está pensando em começar a investir no exterior?"],
-        "App": ["Qual foi a primeira coisa que você tentou fazer ao abrir o app pela primeira vez?", "Descreva a sua maior frustração ou dificuldade ao usar o aplicativo no dia a dia.", "O que você acha mais fácil e mais difícil de encontrar dentro do app?", "Se você pudesse mudar uma tela ou um fluxo no aplicativo, qual seria e por quê?", "Existe alguma funcionalidade que você esperava encontrar no app e não achou?", "Como você descreveria a aparência e a sensação de usar o app para um amigo?", "Com que frequência você abre o aplicativo? O que te leva a abri-lo?", "Você já enfrentou algum bug ou lentidão? Como foi a experiência?", "O que te dá mais segurança ao realizar uma operação financeira pelo app?", "Na sua opinião, qual é a funcionalidade mais útil do aplicativo hoje?"]
-    }
-    return fallback_questions.get(product_name, fallback_questions["App"])
+        response = llm.invoke(prompt)
+        return eval(response.content)
+    except:
+        return ["Qual foi a primeira coisa que você tentou fazer no app?"]
