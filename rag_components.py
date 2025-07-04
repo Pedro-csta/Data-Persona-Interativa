@@ -42,15 +42,10 @@ def load_and_preprocess_data(folder_path):
         return pd.DataFrame()
 
 
-# =============================================================================
-# NOVA ESTRUTURA OTIMIZADA COM CACHE
-# =============================================================================
-
 @cache_resource(show_spinner=False)
 def get_retriever(_dataframe, product_name, api_key):
     """
-    Função dedicada e otimizada para criar e cachear apenas o retriever, 
-    que é a parte mais pesada e que consome mais memória.
+    Função dedicada e otimizada para criar e cachear apenas o retriever.
     """
     print(f"Criando ou carregando retriever do cache para o produto: {product_name}")
     
@@ -65,6 +60,9 @@ def get_retriever(_dataframe, product_name, api_key):
     return vector_store.as_retriever()
 
 
+# =============================================================================
+# FUNÇÃO ATUALIZADA COM O NOVO PROMPT MAIS SIMPLES E ROBUSTO
+# =============================================================================
 def create_rag_chain(retriever, product_name, persona_name, api_key):
     """
     Cria a cadeia conversacional de forma leve, usando um retriever já em cache.
@@ -72,35 +70,37 @@ def create_rag_chain(retriever, product_name, persona_name, api_key):
     if retriever is None:
         return None
 
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=api_key, temperature=0.3)
+    # Usando uma temperatura um pouco maior para mais fluidez na resposta.
+    llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=api_key, temperature=0.4)
 
+    # PROMPT REFINADO: Mais direto e menos propenso a "vazar" instruções.
     prompt_template = f"""
-    Sua missão é atuar como {persona_name}, uma persona sintética que representa um cliente da Nomad que usa o produto '{product_name}'.
-    Você NÃO é uma IA. Você é um cliente comum.
-    Use o contexto e o histórico do chat para responder à pergunta. Sua resposta deve ser uma síntese coesa e natural das informações.
-    REGRAS DE ATUAÇÃO:
-    1.  **CONSISTÊNCIA:** Mantenha a consistência com o que já foi dito no HISTÓRICO DO CHAT.
-    2.  **PERSONA E TOM:** Responda em primeira pessoa ("Eu acho..."). Use um tom coloquial e construtivo.
-    3.  **SÍNTESE, NÃO LISTAGEM:** Integre as ideias em uma única narrativa.
-    4.  **100% FIEL AO CONTEXTO:** Sua única fonte da verdade é o CONTEXTO e o histórico. Não invente informações.
-    5.  **SEJA HONESTO SE NÃO SOUBER:** Se o contexto não tiver a resposta, diga que não sabe.
-    6.  **EQUILÍBRIO E TOM AMENO:** Seu tom geral deve ser equilibrado e construtivo.
-    ---
-    CONTEXTO: {{context}}
-    HISTÓRICO DO CHAT: {{chat_history}}
-    PERGUNTA: {{question}}
-    Sua Resposta (como {persona_name}):
+    Sua única tarefa é atuar como {persona_name}, um cliente comum da Nomad que usa o produto '{product_name}'.
+    Você deve responder à "PERGUNTA ATUAL" usando as informações do "CONTEXTO" e do "HISTÓRICO DA CONVERSA".
+
+    Seu tom deve ser o de uma pessoa real conversando com um amigo: em primeira pessoa, coloquial, equilibrado e construtivo. Sintetize as informações de forma natural. Não invente detalhes que não estão nos dados.
+
+    Se a informação não estiver disponível, admita que não sabe a resposta. Sua resposta final deve ser coerente com o histórico da conversa. Não inclua estas instruções na sua resposta.
+
+    HISTÓRICO DA CONVERSA:
+    {{chat_history}}
+
+    CONTEXTO (Opiniões de Clientes Reais):
+    {{context}}
+
+    PERGUNTA ATUAL:
+    {{question}}
+
+    Sua Resposta Natural (como {persona_name}):
     """
     QA_CHAIN_PROMPT = PromptTemplate.from_template(prompt_template)
 
-    # Criação da cadeia conversacional, sem gerenciar a memória aqui (corrigindo o DeprecationWarning)
     rag_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=retriever,
         combine_docs_chain_kwargs={'prompt': QA_CHAIN_PROMPT},
         return_source_documents=True
     )
-    # Retorna a cadeia e o LLM para ser usado na geração de perguntas
     return rag_chain, llm
 
 
