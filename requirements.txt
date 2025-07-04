@@ -2,6 +2,7 @@ streamlit
 google-generativeai
 langchain-google-genai
 langchain
+langchain-community
 pandas
 chromadb
 numpy
