@@ -39,7 +39,7 @@ def render_home_screen():
     É o Martech aplicado na prática: um recurso para que times de Marketing e Produto validem premissas e aprofundem a empatia com o cliente de forma ágil e sem intermediários.
     """)
 
-    with st.expander("⚙️ Conheça o maquinário por trás da mágica"):
+    with st.expander("⚙️ Conheça o maquinário por trás da aplicação"):
         st.markdown("""
         - **Modelo de Linguagem (LLM):** `Google Gemini 1.5 Pro`
         - **Arquitetura:** `RAG (Retrieval-Augmented Generation)`
