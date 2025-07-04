@@ -28,14 +28,14 @@ def render_footer():
 # TELA 1: HOME / SELEÇÃO
 # =============================================================================
 def render_home_screen():
-    st.title("Data Persona Interativa: O Diálogo Direto com Seus Dados")
+    st.title("Data Persona Interativa 💬")
 
     st.markdown("""
     Esta aplicação cria uma persona interativa e 100% data-driven, utilizando a arquitetura **RAG (Retrieval-Augmented Generation)** e um modelo de linguagem avançado. Diferente de um chatbot, ela responde exclusivamente com base no conhecimento que você fornece (pesquisas, social listening, reviews), garantindo insights autênticos e focados.
 
     Seu verdadeiro poder é a **autonomia**. Em vez de iniciar um novo ciclo de análise para cada pergunta, a ferramenta transforma seus dados estáticos em um **ativo conversacional**. Explore os resultados de suas pesquisas ou os comentários de redes sociais usando linguagem natural, a qualquer hora.
 
-    É o Martech aplicado na prática: um recurso para que times de Marketing e Produto validem premissas e aprofundem a empatia com o cliente de forma ágil e sem intermediários.
+    É o Martech aplicado na prática: um recurso para que times de Marketing e Produto validem premissas e aprofundem a empatia com o cliente de forma ágil e sem intermediários. 👾
     """)
 
     with st.expander("⚙️ Conheça o maquinário por trás da mágica"):
