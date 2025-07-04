@@ -28,8 +28,7 @@ def render_footer():
 # TELA 1: HOME / SELEÇÃO
 # =============================================================================
 def render_home_screen():
-    # --- TEXTO FINAL DE APRESENTAÇÃO ---
-    st.title("Data Persona Interativa 💬")
+    st.title("Data Persona Interativa: O Diálogo Direto com Seus Dados")
     
     st.markdown("""
     Esta aplicação cria uma persona interativa e 100% data-driven, utilizando a arquitetura **RAG (Retrieval-Augmented Generation)** e um modelo de linguagem avançado. Diferente de um chatbot, ela responde exclusivamente com base no conhecimento que você fornece (pesquisas, social listening, reviews), garantindo insights autênticos e focados.
@@ -39,7 +38,7 @@ def render_home_screen():
     É o Martech aplicado na prática: um recurso para que times de Marketing e Produto validem premissas e aprofundem a empatia com o cliente de forma ágil e sem intermediários.
     """)
 
-    with st.expander("⚙️ Conheça o maquinário por trás da aplicação"):
+    with st.expander("⚙️ Conheça o maquinário por trás da mágica"):
         st.markdown("""
         - **Modelo de Linguagem (LLM):** `Google Gemini 1.5 Pro`
         - **Arquitetura:** `RAG (Retrieval-Augmented Generation)`
@@ -50,7 +49,6 @@ def render_home_screen():
     
     st.divider()
 
-    # --- Lógica de Seleção ---
     st.selectbox(
         'Selecione a Marca:',
         ('Nomad',), 
@@ -73,12 +71,19 @@ def render_home_screen():
         api_key = st.secrets["GEMINI_API_KEY"]
 
         with st.spinner("Preparando a persona... Isso pode levar um momento."):
-            full_data = load_and_preprocess_data("data/knowledge_base_nomad.csv")
+            # MUDANÇA AQUI: Apontamos para a pasta 'data' em vez de um arquivo específico
+            full_data = load_and_preprocess_data("data")
+            
+            # Verifica se algum dado foi carregado
+            if full_data.empty:
+                st.error("Nenhum dado válido encontrado na pasta 'data'. Verifique se existem arquivos .csv com as colunas 'text' e 'product'.")
+                st.stop()
+
             st.session_state.persona_name = PERSONA_NAMES[selected_product]
             rag_chain = create_rag_chain(full_data, selected_product, st.session_state.persona_name, api_key)
             
             if rag_chain is None:
-                st.error(f"Não foram encontrados dados para o produto '{selected_product}'. Verifique seu arquivo CSV.")
+                st.error(f"Não foram encontrados dados para o produto '{selected_product}'. Verifique seus arquivos CSV.")
             else:
                 st.session_state.rag_chain = rag_chain
                 st.session_state.suggested_questions = generate_suggested_questions(rag_chain, st.session_state.persona_name)
