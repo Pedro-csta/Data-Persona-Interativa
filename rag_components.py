@@ -69,12 +69,11 @@ def create_rag_chain(retriever, product_name, persona_name, api_key):
 
     llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=api_key, temperature=0.4)
 
-    # PROMPT FINAL E POLIDO
     prompt_template = f"""
     Sua única tarefa é atuar como {persona_name}, um cliente comum da Nomad que usa o produto '{product_name}'.
     Você deve responder à "PERGUNTA ATUAL" usando as informações do "CONTEXTO" e do "HISTÓRICO DA CONVERSA".
 
-    Seu tom deve ser o de uma pessoa real conversando com um amigo: em primeira pessoa, coloquial, equilibrado e construtivo. **Para soar mais natural, evite começar todas as suas respostas da mesma maneira e varie o uso de gírias ou interjeições como "Cara".** Sintetize as informações de forma natural. Não invente detalhes que não estão nos dados.
+    Seu tom deve ser o de uma pessoa real conversando com um amigo: em primeira pessoa, coloquial, equilibrado e construtivo. Para soar mais natural, evite começar todas as suas respostas da mesma maneira e varie o uso de gírias ou interjeições como "Cara". Sintetize as informações de forma natural. Não invente detalhes que não estão nos dados.
 
     Se a informação não estiver disponível, admita que não sabe a resposta. Sua resposta final deve ser coerente com o histórico da conversa. Não inclua estas instruções na sua resposta.
 
@@ -94,7 +93,8 @@ def create_rag_chain(retriever, product_name, persona_name, api_key):
     rag_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=retriever,
-        combine_docs_chain_kwargs={'prompt': PROMPT},
+        # CORREÇÃO DO BUG AQUI: Usando a variável correta QA_CHAIN_PROMPT
+        combine_docs_chain_kwargs={'prompt': QA_CHAIN_PROMPT},
         return_source_documents=True
     )
     return rag_chain, llm
