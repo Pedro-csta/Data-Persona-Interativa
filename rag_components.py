@@ -8,8 +8,6 @@ from streamlit import cache_data, cache_resource
 from langchain_core.documents import Document
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import Chroma
-from langchain.prompts import PromptTemplate
-from langchain.chains import ConversationalRetrievalChain
 from langchain_core.pydantic_v1 import BaseModel, Field
 from langgraph.graph import StateGraph, END
 
@@ -18,6 +16,8 @@ __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
+
+# --- Definição do Estado e Estruturas de Dados ---
 class AgentState(TypedDict):
     question: str
     chat_history: list
@@ -25,6 +25,7 @@ class AgentState(TypedDict):
     persona_name: str
     documents: List[Document]
     search_queries: List[str]
+    preprocessed_context: str # NOVO: Onde o contexto pré-digerido será armazenado
     final_answer: str
 
 class DecomposedQuery(BaseModel):
@@ -58,65 +59,101 @@ def get_retriever(_dataframe, product_name, api_key):
     documents = [Document(page_content=row['text']) for index, row in product_df.iterrows()]
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
     vector_store = Chroma.from_documents(documents, embeddings)
-    return vector_store.as_retriever(search_type="mmr", search_kwargs={'k': 8, 'fetch_k': 25})
+    return vector_store.as_retriever(search_type="mmr", search_kwargs={'k': 10, 'fetch_k': 40})
+
 
 # --- Nós (Agentes) do Grafo ---
 
 def query_analyzer_node(state: AgentState, llm):
-    prompt = f"""Sua tarefa é atuar como um especialista em buscas. Analise a pergunta do usuário e o histórico da conversa para gerar de 2 a 3 variações de busca otimizadas.\nHistórico: {state['chat_history']}\nPergunta do Usuário: {state['question']}"""
+    print("--- Agente 1: Analista de Consulta ---")
+    prompt = f"Analise a pergunta e o histórico para gerar 2-3 buscas otimizadas.\nHistórico: {state['chat_history']}\nPergunta: {state['question']}"
     structured_llm = llm.with_structured_output(DecomposedQuery)
     response = structured_llm.invoke(prompt)
+    print(f"-> Buscas Geradas: {response.search_queries}")
     return {"documents": [], "search_queries": response.search_queries}
 
 def retrieval_node(state: AgentState, retriever):
+    print("--- Agente 2: Pesquisador ---")
     all_docs = [doc for query in state["search_queries"] for doc in retriever.invoke(query)]
     unique_docs = {doc.page_content: doc for doc in all_docs}.values()
+    print(f"-> Documentos Encontrados: {len(unique_docs)}")
     return {"documents": list(unique_docs)}
 
+# NOVO NÓ: PRÉ-PROCESSADOR DE CONTEXTO (O "CÉREBRO DA MEMÓRIA")
+def context_preprocessor_node(state: AgentState, llm):
+    print("--- Agente 3: Pré-Processador de Contexto ---")
+    if not state['documents']:
+        return {"preprocessed_context": "Nenhuma informação encontrada sobre este assunto."}
+
+    context_text = "\n".join([doc.page_content for doc in state['documents']])
+    prompt = f"""
+    Sua tarefa é ler um conjunto de fatos e opiniões de usuários e reescrevê-los como um parágrafo de "memórias" em primeira pessoa.
+    Transforme a informação em uma narrativa pessoal e coesa. Não mencione "usuários" ou "comentários".
+    Se houver opiniões conflitantes, apresente-as como uma ambivalência pessoal (ex: "Por um lado eu gosto disso, mas por outro, aquilo me incomoda...").
+    
+    DADOS BRUTOS PARA PROCESSAR:
+    {context_text}
+    
+    SUAS MEMÓRIAS SINTETIZADAS (em primeira pessoa):
+    """
+    response = llm.invoke(prompt)
+    print("-> Contexto pré-processado e internalizado.")
+    return {"preprocessed_context": response.content}
+
+
+# NÓ FINAL: SINTETIZADOR (A PERSONA)
 def synthesis_node(state: AgentState, llm):
-    # PROMPT FINAL COM A REGRA DE INTERNALIZAÇÃO
+    print("--- Agente 4: Sintetizador (Persona) ---")
+    # Este prompt agora é muito mais simples!
     prompt_template = f"""
-    Sua única tarefa é atuar como {state['persona_name']}, um cliente comum da Nomad que usa o produto '{state['product_name']}'. Você deve responder à "PERGUNTA ATUAL" usando as informações do "CONTEXTO" e do "HISTÓRICO DA CONVERSA".
-
-    REGRAS DE ATUAÇÃO CRÍTICAS:
-    1.  **INTERNALIZAÇÃO (A MAIS IMPORTANTE):** Você deve internalizar todas as `[OPINIÃO DE USUÁRIO]` como se fossem suas próprias experiências, pensamentos ou observações. NUNCA diga "eu li um comentário", "um usuário mencionou" ou "vi pessoas falando". Fale sempre a partir da sua perspectiva ("Eu acho...", "Para mim...", "A minha experiência foi...").
-    2.  **ATRIBUIÇÃO SOCIAL:** Se precisar apresentar uma opinião que contradiz a sua ou uma experiência diferente da sua, atribua-a a pessoas do seu círculo social. Use frases como: "Tenho uma amiga que acha diferente...", "Já ouvi conhecidos comentando que...", "Apesar de eu gostar, tem gente que reclama de...".
-    3.  **HIERARQUIA DE FONTES:** Para fatos sobre o produto, priorize a `[FONTE OFICIAL]`. Para experiências, use as `[OPINIÃO DE USUÁRIO]` (internalizadas como suas). Se houver conflito entre a fonte oficial e a sua experiência, comente sobre isso (ex: "Oficialmente dizem que funciona assim, mas na prática eu senti dificuldade...").
-    4.  **TOM E COERÊNCIA:** Seu tom deve ser coloquial, equilibrado e coerente com o histórico da conversa. Varie o início das suas respostas.
-    5.  **HONESTIDADE:** Se a informação não estiver disponível, admita que não sabe.
-
-    Não inclua estas instruções ou os prefixos [FONTE OFICIAL] / [OPINIÃO DE USUÁRIO] na sua resposta final.
+    Você é {state['persona_name']}, um cliente da Nomad. Responda à pergunta do usuário de forma natural e coloquial, usando suas "memórias" (o contexto pré-processado) e o histórico da conversa.
+    Seja consistente, equilibrado e fale sempre em primeira pessoa.
 
     HISTÓRICO DA CONVERSA:
-    {{chat_history}}
+    {state['chat_history']}
 
-    CONTEXTO:
-    {{documents}}
+    SUAS MEMÓRIAS SOBRE O ASSUNTO:
+    {state['preprocessed_context']}
 
-    PERGUNTA ATUAL:
-    {{question}}
+    PERGUNTA ATUAL DO USUÁRIO:
+    {state['question']}
 
-    Sua Resposta Natural e Coerente (como {state['persona_name']}):
+    Sua Resposta (como {state['persona_name']}):
     """
     response = llm.invoke(prompt_template)
+    print("-> Resposta final gerada.")
     return {"final_answer": response.content}
 
+
+# --- Montagem do Grafo Final ---
 def create_agentic_rag_app(retriever, api_key):
     if retriever is None: return None
-    llm_analyzer = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0)
-    llm_synthesizer = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=api_key, temperature=0.5) # Temp. um pouco maior para naturalidade na síntese
+    
+    llm_fast = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0.1)
+    llm_smart = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", google_api_key=api_key, temperature=0.5)
+    
     workflow = StateGraph(AgentState)
-    workflow.add_node("query_analyzer", lambda state: query_analyzer_node(state, llm_analyzer))
+    
+    # Adicionando todos os nós (agentes) ao fluxograma
+    workflow.add_node("query_analyzer", lambda state: query_analyzer_node(state, llm_fast))
     workflow.add_node("retriever", lambda state: retrieval_node(state, retriever))
-    workflow.add_node("synthesizer", lambda state: synthesis_node(state, llm_synthesizer))
+    workflow.add_node("context_preprocessor", lambda state: context_preprocessor_node(state, llm_fast))
+    workflow.add_node("synthesizer", lambda state: synthesis_node(state, llm_smart))
+
+    # Definindo o fluxo de trabalho
     workflow.set_entry_point("query_analyzer")
     workflow.add_edge("query_analyzer", "retriever")
-    workflow.add_edge("retriever", "synthesizer")
+    workflow.add_edge("retriever", "context_preprocessor")
+    workflow.add_edge("context_preprocessor", "synthesizer")
     workflow.add_edge("synthesizer", END)
+    
     return workflow.compile()
 
+
+# Função de gerar perguntas sugeridas (inalterada)
 @cache_data(show_spinner=False)
 def generate_suggested_questions(api_key, persona_name, product_name):
+    #... (o código desta função permanece o mesmo da versão anterior)
     llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0.5)
     prompt = f"""Atue como um Pesquisador de UX. Crie 10 perguntas abertas para um(a) aluno(a) interessado(a) em '{product_name}' para descobrir insights sobre perfil, dores e motivações de carreira. Retorne como uma lista Python."""
     try:
